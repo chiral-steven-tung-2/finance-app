@@ -6,8 +6,8 @@ const STORAGE_INCOME    = 'finance-income-v1'
 const STORAGE_TAX       = 'finance-tax-v1'
 const STORAGE_BUDGET    = 'finance-budget-v1'
 const STORAGE_RECURRING = 'finance-recurring-v1'
+const STORAGE_CAT_NAMES = 'finance-budget-cats-v1'
 
-const NO_CATEGORY  = '(Uncategorized)'
 const SPECIAL_KEYS = new Set(['__savings__', '__investments__'])
 
 const DEFAULT_RECURRING = [
@@ -49,16 +49,6 @@ function toMonthly(amount, freqId) {
 
 function fmt(v) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Math.abs(v))
-}
-
-function monthKey(dateStr) {
-  const [m, , y] = dateStr.split('/')
-  return `${y}-${m.padStart(2, '0')}`
-}
-
-function monthLabel(key) {
-  const [y, m] = key.split('-')
-  return new Date(+y, +m - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' })
 }
 
 function IncomeBreakdown({ amount, taxAmount, freqId }) {
@@ -107,7 +97,6 @@ function IncomeBreakdown({ amount, taxAmount, freqId }) {
   )
 }
 
-// Reusable budget input cell
 function BudgetCell({ value, onChange }) {
   return (
     <div className="budget-input-cell">
@@ -125,49 +114,77 @@ function BudgetCell({ value, onChange }) {
   )
 }
 
-export function Budget({ allActiveTxs }) {
-  const [balance, setBalance] = useState(() => loadJSON(STORAGE_BALANCE, ''))
-  const [income,  setIncome]  = useState(() => loadJSON(STORAGE_INCOME,  { amount: '', freq: 'biweekly' }))
-  const [tax,     setTax]     = useState(() => loadJSON(STORAGE_TAX, ''))
-  const [budgets,   setBudgets]   = useState(() => loadJSON(STORAGE_BUDGET, {}))
-  const [recurring, setRecurring] = useState(() => loadJSON(STORAGE_RECURRING, null) ?? DEFAULT_RECURRING)
-  const [selMonth,  setSelMonth]  = useState(null)
+function monthKey(dateStr) {
+  const [m, , y] = dateStr.split('/')
+  return `${y}-${m.padStart(2, '0')}`
+}
 
-  const months = useMemo(() => {
-    const s = new Set(allActiveTxs.map(t => monthKey(t.date)))
-    return [...s].sort().reverse()
-  }, [allActiveTxs])
+export function Budget({ txs = [] }) {
+  const [balance,   setBalance]   = useState(() => loadJSON(STORAGE_BALANCE, ''))
+  const [income,    setIncome]    = useState(() => loadJSON(STORAGE_INCOME,  { amount: '', freq: 'biweekly' }))
+  const [tax,       setTax]       = useState(() => loadJSON(STORAGE_TAX, ''))
+  const [budgets,    setBudgets]   = useState(() => loadJSON(STORAGE_BUDGET, {}))
+  const [recurring,  setRecurring] = useState(() => loadJSON(STORAGE_RECURRING, null) ?? DEFAULT_RECURRING)
+  const [newCat,     setNewCat]    = useState('')
+  const [catNames,   setCatNames]  = useState(() => {
+    const stored = loadJSON(STORAGE_CAT_NAMES, null)
+    if (stored) return stored
+    // Bootstrap from existing budget keys on first load
+    const existing = Object.keys(loadJSON(STORAGE_BUDGET, {})).filter(k => !SPECIAL_KEYS.has(k)).sort()
+    if (existing.length) saveJSON(STORAGE_CAT_NAMES, existing)
+    return existing
+  })
 
-  const currentMonth = selMonth ?? months[0] ?? null
+  const allCategories = catNames
 
-  const spentByCategory = useMemo(() => {
-    const map = new Map()
-    for (const t of allActiveTxs) {
+  const monthlyGross   = income.amount ? toMonthly(parseFloat(income.amount) || 0, income.freq) : null
+  const monthlyTaxAmt  = tax && monthlyGross !== null ? toMonthly(parseFloat(tax) || 0, income.freq) : 0
+  const monthlyIncome  = monthlyGross !== null ? monthlyGross - monthlyTaxAmt : null
+
+  // Per-category spending reference: avg/mo and last-month from actual transactions
+  const spendingRef = useMemo(() => {
+    const totals = new Map()   // cat → total spent all time
+    const months  = new Map()  // cat → Set of months with spend
+    const lastMo  = new Map()  // cat → spend in most recent month
+
+    let latestMonth = ''
+    for (const t of txs) {
       if (t.amount >= 0) continue
-      if (currentMonth && monthKey(t.date) !== currentMonth) continue
-      const cat = t.category || NO_CATEGORY
-      map.set(cat, (map.get(cat) || 0) + Math.abs(t.amount))
+      const mk = monthKey(t.date)
+      if (mk > latestMonth) latestMonth = mk
     }
-    return map
-  }, [allActiveTxs, currentMonth])
 
-  // Spending categories — exclude special savings/investment keys
-  const allCategories = useMemo(() => {
-    const s = new Set([...Object.keys(budgets), ...spentByCategory.keys()])
-    SPECIAL_KEYS.forEach(k => s.delete(k))
-    return [...s].sort()
-  }, [budgets, spentByCategory])
+    for (const t of txs) {
+      if (t.amount >= 0) continue
+      const cat = t.category || '(Uncategorized)'
+      const mk  = monthKey(t.date)
+      const amt = Math.abs(t.amount)
+      totals.set(cat, (totals.get(cat) || 0) + amt)
+      if (!months.has(cat)) months.set(cat, new Set())
+      months.get(cat).add(mk)
+      if (mk === latestMonth) lastMo.set(cat, (lastMo.get(cat) || 0) + amt)
+    }
 
-  const monthlyGross    = income.amount ? toMonthly(parseFloat(income.amount) || 0, income.freq) : null
-  const monthlyTaxAmt   = tax && monthlyGross !== null ? toMonthly(parseFloat(tax) || 0, income.freq) : 0
-  // Budget against after-tax (take-home) income
-  const monthlyIncome   = monthlyGross !== null ? monthlyGross - monthlyTaxAmt : null
-  const spendingBudget  = allCategories.reduce((s, c) => s + (parseFloat(budgets[c]) || 0), 0)
-  const savingsBudget   = parseFloat(budgets['__savings__'])     || 0
-  const investBudget    = parseFloat(budgets['__investments__']) || 0
-  const recurringTotal  = recurring.filter(r => r.enabled).reduce((s, r) => s + rcMonthly(r), 0)
-  const totalBudgeted   = spendingBudget + recurringTotal + savingsBudget + investBudget
-  const totalSpent      = [...spentByCategory.values()].reduce((s, v) => s + v, 0)
+    // Number of distinct months in the entire dataset (for denominator)
+    const allMonths = new Set()
+    for (const t of txs) if (t.amount < 0) allMonths.add(monthKey(t.date))
+    const totalMonths = Math.max(allMonths.size, 1)
+
+    const ref = {}
+    for (const [cat, total] of totals) {
+      const avg  = total / totalMonths
+      const last = lastMo.get(cat) ?? null
+      ref[cat] = { avg, last, latestMonth }
+    }
+    return { ref, latestMonth }
+  }, [txs])
+
+  const spendingBudget = allCategories.reduce((s, c) => s + (parseFloat(budgets[c]) || 0), 0)
+  const savingsBudget  = parseFloat(budgets['__savings__'])     || 0
+  const investBudget   = parseFloat(budgets['__investments__']) || 0
+  const recurringTotal = recurring.filter(r => r.enabled).reduce((s, r) => s + rcMonthly(r), 0)
+  const totalExpenses  = spendingBudget + recurringTotal + savingsBudget + investBudget
+  const remaining      = (monthlyIncome ?? 0) - totalExpenses
 
   function handleBalance(e) {
     const v = e.target.value; setBalance(v); saveJSON(STORAGE_BALANCE, v)
@@ -187,6 +204,25 @@ export function Budget({ allActiveTxs }) {
       return next
     })
   }
+  function addCategory() {
+    const name = newCat.trim()
+    if (!name || catNames.includes(name)) return
+    const next = [...catNames, name].sort()
+    setCatNames(next)
+    saveJSON(STORAGE_CAT_NAMES, next)
+    setNewCat('')
+  }
+  function removeCategory(cat) {
+    const nextNames = catNames.filter(n => n !== cat)
+    setCatNames(nextNames)
+    saveJSON(STORAGE_CAT_NAMES, nextNames)
+    setBudgets(prev => {
+      const next = { ...prev }
+      delete next[cat]
+      saveJSON(STORAGE_BUDGET, next)
+      return next
+    })
+  }
 
   function handleRecurring(id, field, val) {
     setRecurring(prev => {
@@ -195,7 +231,6 @@ export function Budget({ allActiveTxs }) {
       return next
     })
   }
-
   function addRecurring() {
     setRecurring(prev => {
       const next = [...prev, { id: newRcId(), name: 'Custom', amount: '', freq: 'monthly', enabled: true, custom: true }]
@@ -203,7 +238,6 @@ export function Budget({ allActiveTxs }) {
       return next
     })
   }
-
   function deleteRecurring(id) {
     setRecurring(prev => {
       const next = prev.filter(r => r.id !== id)
@@ -228,19 +262,6 @@ export function Budget({ allActiveTxs }) {
     } else {
       out.push({ type: 'info', text: `Savings + investment rate is ${savingsRate.toFixed(1)}% of take-home.`, detail: `Increase to 20% to maximize compounding — that's ${fmt(monthlyIncome * 0.2 - savingsBudget - investBudget)} more/mo.` })
     }
-    const overCats = allCategories.filter(cat => {
-      const b = parseFloat(budgets[cat]) || 0
-      const s = spentByCategory.get(cat) || 0
-      return b > 0 && s > b
-    })
-    if (overCats.length > 0) {
-      out.push({ type: 'warn',
-        text: `${overCats.length} categor${overCats.length > 1 ? 'ies are' : 'y is'} over budget this month.`,
-        detail: overCats.slice(0, 4).join(', ') + (overCats.length > 4 ? ` +${overCats.length - 4} more` : ''),
-      })
-    } else if (allCategories.some(cat => parseFloat(budgets[cat]) > 0)) {
-      out.push({ type: 'good', text: 'All categories are within budget this month.' })
-    }
     if (recurringTotal > 0) {
       const rcPct = (recurringTotal / monthlyIncome) * 100
       if (rcPct > 50) {
@@ -251,11 +272,10 @@ export function Budget({ allActiveTxs }) {
         out.push({ type: 'good', text: `Fixed costs are a healthy ${rcPct.toFixed(1)}% of take-home (${fmt(recurringTotal)}/mo).` })
       }
     }
-    const unalloc = monthlyIncome - totalBudgeted
-    if (unalloc < 0) {
-      out.push({ type: 'bad', text: `Budget exceeds take-home by ${fmt(Math.abs(unalloc))}/mo.`, detail: 'Reduce allocations to avoid overspending your income.' })
-    } else if (unalloc > monthlyIncome * 0.15) {
-      out.push({ type: 'info', text: `${fmt(unalloc)}/mo is unallocated.`, detail: 'Direct this toward savings, investments, or an emergency fund.' })
+    if (remaining < 0) {
+      out.push({ type: 'bad', text: `Budget exceeds take-home by ${fmt(Math.abs(remaining))}/mo.`, detail: 'Reduce allocations to avoid overspending your income.' })
+    } else if (monthlyIncome && remaining > monthlyIncome * 0.15) {
+      out.push({ type: 'info', text: `${fmt(remaining)}/mo is unallocated.`, detail: 'Direct this toward savings, investments, or an emergency fund.' })
     }
     return out
   })()
@@ -303,15 +323,8 @@ export function Budget({ allActiveTxs }) {
               </div>
               <div className="bi-tax-input-wrap">
                 <span className="bi-tax-minus">−$</span>
-                <input
-                  className="bi-input bi-input-sm"
-                  type="number"
-                  placeholder="0.00"
-                  value={tax}
-                  onChange={handleTax}
-                  min="0"
-                  step="0.01"
-                />
+                <input className="bi-input bi-input-sm" type="number" placeholder="0.00"
+                  value={tax} onChange={handleTax} min="0" step="0.01" />
               </div>
             </div>
 
@@ -326,130 +339,153 @@ export function Budget({ allActiveTxs }) {
         </div>
       </div>
 
-      {/* ── Budget Planner ────────────────────────────── */}
-      <div className="budget-section">
-        <InsightPanel insights={budgetInsights} />
-        <div className="planner-heading">
-          <div className="budget-section-title">Monthly Budget Planner</div>
-          {months.length > 0 && (
-            <select className="month-select" value={currentMonth ?? ''}
-              onChange={e => setSelMonth(e.target.value)}>
-              {months.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
-            </select>
-          )}
-        </div>
-
-        {/* Allocation bar */}
-        {monthlyIncome !== null && (
-          <div className="alloc-bar">
-            <div className="alloc-stat">
-              <span className="alloc-label">{monthlyTaxAmt > 0 ? 'Take-home / mo' : 'Monthly income'}</span>
-              <span className="alloc-val income-color">{fmt(monthlyIncome)}</span>
-              {monthlyTaxAmt > 0 && (
-                <span className="alloc-gross-note">gross {fmt(monthlyGross)}</span>
-              )}
+      {/* ── Projected Monthly Summary ─────────────────── */}
+      {monthlyIncome !== null && (
+        <div className="budget-section">
+          <div className="budget-section-title">Projected Monthly</div>
+          <div className="proj-summary">
+            <div className="proj-income-row">
+              <span className="proj-row-label">Take-home income</span>
+              <span className="proj-row-val income-color">+{fmt(monthlyIncome)}</span>
             </div>
-            <div className="alloc-divider" />
-            <div className="alloc-stat">
-              <span className="alloc-label">Spending</span>
-              <span className="alloc-val" style={{ color: '#94a3b8' }}>{fmt(spendingBudget)}</span>
-            </div>
-            <div className="alloc-divider" />
-            <div className="alloc-stat">
-              <span className="alloc-label">Fixed</span>
-              <span className="alloc-val" style={{ color: '#f59e0b' }}>{fmt(recurringTotal)}</span>
-            </div>
-            <div className="alloc-divider" />
-            <div className="alloc-stat">
-              <span className="alloc-label">Savings</span>
-              <span className="alloc-val" style={{ color: '#818cf8' }}>{fmt(savingsBudget)}</span>
-            </div>
-            <div className="alloc-divider" />
-            <div className="alloc-stat">
-              <span className="alloc-label">Investments</span>
-              <span className="alloc-val" style={{ color: '#4ade80' }}>{fmt(investBudget)}</span>
-            </div>
-            <div className="alloc-divider" />
-            <div className="alloc-stat">
-              <span className="alloc-label">Unallocated</span>
-              <span className={`alloc-val ${monthlyIncome - totalBudgeted >= 0 ? 'credit-color' : 'debit-color'}`}>
-                {fmt(Math.abs(monthlyIncome - totalBudgeted))}
-                {monthlyIncome - totalBudgeted < 0 ? ' over' : ''}
+            <div className="proj-divider" />
+            {recurringTotal > 0 && (
+              <div className="proj-expense-row">
+                <span className="proj-row-label">Fixed costs</span>
+                <span className="proj-row-val debit-color">−{fmt(recurringTotal)}</span>
+              </div>
+            )}
+            {spendingBudget > 0 && (
+              <div className="proj-expense-row">
+                <span className="proj-row-label">Variable spending</span>
+                <span className="proj-row-val debit-color">−{fmt(spendingBudget)}</span>
+              </div>
+            )}
+            {savingsBudget > 0 && (
+              <div className="proj-expense-row">
+                <span className="proj-row-label">Savings (HYSA)</span>
+                <span className="proj-row-val" style={{ color: '#818cf8' }}>−{fmt(savingsBudget)}</span>
+              </div>
+            )}
+            {investBudget > 0 && (
+              <div className="proj-expense-row">
+                <span className="proj-row-label">Investments</span>
+                <span className="proj-row-val" style={{ color: '#4ade80' }}>−{fmt(investBudget)}</span>
+              </div>
+            )}
+            <div className="proj-divider" />
+            <div className="proj-remaining-row">
+              <span className="proj-row-label">Remaining</span>
+              <span className={`proj-remaining-val ${remaining >= 0 ? 'credit-color' : 'debit-color'}`}>
+                {remaining >= 0 ? '+' : '−'}{fmt(Math.abs(remaining))}
+                {remaining < 0 && <span className="proj-over-badge">over budget</span>}
               </span>
             </div>
-            <div className="alloc-track-wrap">
-              <div className="alloc-track">
-                {/* spending — slate blue */}
-                <div className="alloc-fill"
-                  style={{ width: `${Math.min((spendingBudget / monthlyIncome) * 100, 100)}%`, background: '#64748b' }}
-                  title={`Spending: ${fmt(spendingBudget)}`} />
-                {/* fixed recurring — amber */}
-                <div className="alloc-fill"
-                  style={{
-                    width: `${Math.min((recurringTotal / monthlyIncome) * 100, 100)}%`,
-                    background: '#f59e0b',
-                    left: `${Math.min((spendingBudget / monthlyIncome) * 100, 100)}%`,
-                    position: 'absolute',
-                  }}
-                  title={`Fixed: ${fmt(recurringTotal)}`} />
-                {/* savings */}
-                <div className="alloc-fill"
-                  style={{
-                    width: `${Math.min((savingsBudget / monthlyIncome) * 100, 100)}%`,
-                    background: '#818cf8',
-                    left: `${Math.min(((spendingBudget + recurringTotal) / monthlyIncome) * 100, 100)}%`,
-                    position: 'absolute',
-                  }}
-                  title={`Savings: ${fmt(savingsBudget)}`} />
-                {/* investments */}
-                <div className="alloc-fill"
-                  style={{
-                    width: `${Math.min((investBudget / monthlyIncome) * 100, 100)}%`,
-                    background: '#4ade80',
-                    left: `${Math.min(((spendingBudget + recurringTotal + savingsBudget) / monthlyIncome) * 100, 100)}%`,
-                    position: 'absolute',
-                  }}
-                  title={`Investments: ${fmt(investBudget)}`} />
-              </div>
-              <div className="alloc-track-labels">
-                <span>$0</span>
-                <span>{fmt(monthlyIncome)}</span>
-              </div>
-            </div>
-          </div>
-        )}
 
-        {/* Planner table */}
+            {/* Allocation bar */}
+            {monthlyIncome > 0 && (
+              <div className="proj-bar-wrap">
+                <div className="proj-alloc-track">
+                  <div className="proj-alloc-fill" title={`Fixed: ${fmt(recurringTotal)}`}
+                    style={{ width: `${Math.min((recurringTotal / monthlyIncome) * 100, 100)}%`, background: '#f59e0b' }} />
+                  <div className="proj-alloc-fill" title={`Spending: ${fmt(spendingBudget)}`}
+                    style={{ width: `${Math.min((spendingBudget / monthlyIncome) * 100, 100)}%`, background: '#64748b',
+                      left: `${Math.min((recurringTotal / monthlyIncome) * 100, 100)}%`, position: 'absolute' }} />
+                  <div className="proj-alloc-fill" title={`Savings: ${fmt(savingsBudget)}`}
+                    style={{ width: `${Math.min((savingsBudget / monthlyIncome) * 100, 100)}%`, background: '#818cf8',
+                      left: `${Math.min(((recurringTotal + spendingBudget) / monthlyIncome) * 100, 100)}%`, position: 'absolute' }} />
+                  <div className="proj-alloc-fill" title={`Investments: ${fmt(investBudget)}`}
+                    style={{ width: `${Math.min((investBudget / monthlyIncome) * 100, 100)}%`, background: '#4ade80',
+                      left: `${Math.min(((recurringTotal + spendingBudget + savingsBudget) / monthlyIncome) * 100, 100)}%`, position: 'absolute' }} />
+                </div>
+                <div className="proj-bar-legend">
+                  <span className="proj-legend-dot" style={{ background: '#f59e0b' }} /> Fixed
+                  <span className="proj-legend-dot" style={{ background: '#64748b', marginLeft: 10 }} /> Spending
+                  <span className="proj-legend-dot" style={{ background: '#818cf8', marginLeft: 10 }} /> Savings
+                  <span className="proj-legend-dot" style={{ background: '#4ade80', marginLeft: 10 }} /> Invest
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Insights ─────────────────────────────────── */}
+      <div className="budget-section">
+        <InsightPanel insights={budgetInsights} />
+      </div>
+
+      {/* ── Budget Planner ────────────────────────────── */}
+      <div className="budget-section">
+        <div className="budget-section-title">Monthly Budget Planner</div>
+
+        {/* Add category */}
+        <div className="bud-add-cat-row">
+          <input
+            className="bud-add-cat-inp"
+            type="text"
+            placeholder="New category name…"
+            value={newCat}
+            onChange={e => setNewCat(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addCategory()}
+          />
+          <button className="bud-add-cat-btn" onClick={addCategory} disabled={!newCat.trim()}>
+            + Add
+          </button>
+        </div>
+
         <div className={`planner-list${monthlyIncome ? ' pl-has-income' : ''}`}>
 
           {/* Header */}
-          <div className="pr-header">
+          <div className="pr-header pr-header-no-spent">
             <span>Category</span>
             <span>Budget / mo</span>
+            <span className="pr-ref-hdr">
+              {spendingRef.latestMonth
+                ? (() => {
+                    const [y, m] = spendingRef.latestMonth.split('-')
+                    return new Date(+y, +m - 1, 1).toLocaleString('en-US', { month: 'short' }) + ' actual'
+                  })()
+                : 'Avg / mo'}
+            </span>
             <span />
-            <span>Spent</span>
-            <span>Remaining</span>
             {monthlyIncome && <span>Income %</span>}
+            <span />
           </div>
 
-          {/* Spending category rows */}
+          {allCategories.length === 0 && (
+            <div className="bud-empty-cats">
+              No spending categories yet — add one above.
+            </div>
+          )}
+
           {allCategories.map(cat => {
             const budget   = parseFloat(budgets[cat]) || 0
-            const spent    = spentByCategory.get(cat) || 0
-            const rem      = budget - spent
-            const over     = budget > 0 && spent > budget
             const sliderMax = monthlyIncome
               ? Math.ceil(monthlyIncome * 0.5)
-              : Math.max(Math.ceil((Math.max(budget, spent) * 1.5 + 100) / 50) * 50, 500)
+              : Math.max(Math.ceil((budget * 1.5 + 100) / 50) * 50, 500)
             const fillPct  = sliderMax > 0 ? Math.min((budget / sliderMax) * 100, 100) : 0
 
+            const ref = spendingRef.ref[cat]
+            // Show last-month if available, fall back to avg
+            const refAmt  = ref?.last ?? ref?.avg ?? null
+            const isLastMo = ref?.last != null
+            const budget2 = parseFloat(budgets[cat]) || 0
+            const overRef  = refAmt != null && budget2 > 0 && refAmt > budget2
+
             return (
-              <div key={cat} className={`planner-row${over ? ' row-over' : ''}`}>
+              <div key={cat} className="planner-row pr-row-no-spent">
                 <span className="pr-cat">{cat}</span>
 
                 <div className="pr-budget">
                   <BudgetCell value={budgets[cat]} onChange={v => handleBudget(cat, v)} />
                 </div>
+
+                <span className={`pr-ref${overRef ? ' pr-ref-over' : ''}`}>
+                  {refAmt != null
+                    ? <>{fmt(refAmt)}{!isLastMo && <span className="pr-ref-tag"> avg</span>}</>
+                    : <span className="muted">—</span>}
+                </span>
 
                 <div className="pr-slider">
                   <div className="pi-slider-wrap">
@@ -461,28 +497,8 @@ export function Budget({ allActiveTxs }) {
                       onChange={e => handleBudget(cat, e.target.value)}
                       style={{ '--fill': `${fillPct}%` }}
                     />
-                    {spent > 0 && sliderMax > 0 && (
-                      <div
-                        className={`slider-spent-mark${over ? ' mark-over' : ''}`}
-                        style={{ '--spent-pos': `${Math.min((spent / sliderMax) * 100, 100)}%` }}
-                      />
-                    )}
                   </div>
                 </div>
-
-                <span className="pr-spent">
-                  {spent > 0
-                    ? <span className="debit-color">{fmt(spent)}</span>
-                    : <span className="muted">—</span>}
-                </span>
-
-                <span className="pr-rem">
-                  {budget > 0
-                    ? <span className={over ? 'debit-color' : rem === 0 ? '' : 'credit-color'}>
-                        {over ? `${fmt(Math.abs(rem))} over` : fmt(rem)}
-                      </span>
-                    : <span className="muted">—</span>}
-                </span>
 
                 {monthlyIncome && (
                   <span className="pr-pct">
@@ -491,6 +507,8 @@ export function Budget({ allActiveTxs }) {
                       : <span className="muted">—</span>}
                   </span>
                 )}
+
+                <button className="bud-del-cat-btn" onClick={() => removeCategory(cat)} title="Remove category">×</button>
               </div>
             )
           })}
@@ -509,7 +527,7 @@ export function Budget({ allActiveTxs }) {
             const fillPct   = sliderMax > 0 ? Math.min((budget / sliderMax) * 100, 100) : 0
 
             return (
-              <div key={key} className="planner-row pr-si">
+              <div key={key} className="planner-row pr-si pr-row-no-spent">
                 <span className="pr-cat" style={{ color }}>{label}</span>
 
                 <div className="pr-budget">
@@ -529,14 +547,6 @@ export function Budget({ allActiveTxs }) {
                   </div>
                 </div>
 
-                <span className="pr-spent muted">—</span>
-
-                <span className="pr-rem">
-                  {budget > 0
-                    ? <span style={{ color, fontFamily: 'var(--mono)', fontSize: 12 }}>{fmt(budget)}/mo</span>
-                    : <span className="muted">—</span>}
-                </span>
-
                 {monthlyIncome && (
                   <span className="pr-pct">
                     {budget > 0
@@ -544,22 +554,25 @@ export function Budget({ allActiveTxs }) {
                       : <span className="muted">—</span>}
                   </span>
                 )}
+
+                <span />
               </div>
             )
           })}
 
           {/* Footer totals */}
-          <div className="planner-footer">
-            <span className="pf-label">Spending total</span>
-            <span className="pf-val">{spendingBudget > 0 ? fmt(spendingBudget) : '—'}</span>
+          <div className="planner-footer pf-no-spent">
+            <span className="pf-label">Total budgeted</span>
+            <span className="pf-val">{totalExpenses > 0 ? fmt(totalExpenses) : '—'}</span>
             <span />
-            <span className="pf-val debit-color">{totalSpent > 0 ? fmt(totalSpent) : '—'}</span>
-            <span className={`pf-val ${totalSpent <= spendingBudget ? 'credit-color' : 'debit-color'}`}>
-              {spendingBudget > 0
-                ? (totalSpent <= spendingBudget ? fmt(spendingBudget - totalSpent) + ' left' : fmt(totalSpent - spendingBudget) + ' over')
-                : '—'}
-            </span>
-            {monthlyIncome && <span />}
+            {monthlyIncome && (
+              <span className={`pf-val ${remaining >= 0 ? 'credit-color' : 'debit-color'}`}>
+                {monthlyIncome > 0
+                  ? (remaining >= 0 ? fmt(remaining) + ' left' : fmt(Math.abs(remaining)) + ' over')
+                  : '—'}
+              </span>
+            )}
+            <span />
           </div>
         </div>
       </div>
@@ -569,7 +582,6 @@ export function Budget({ allActiveTxs }) {
         <div className="budget-section-title">Fixed Recurring Costs</div>
 
         <div className="rc-list">
-          {/* Header */}
           <div className="rc-header">
             <span />
             <span>Name</span>
@@ -583,37 +595,21 @@ export function Budget({ allActiveTxs }) {
             const mo = rcMonthly(r)
             return (
               <div key={r.id} className={`rc-row${!r.enabled ? ' rc-row-off' : ''}`}>
-                <input
-                  type="checkbox"
-                  className="rc-check"
-                  checked={r.enabled}
-                  onChange={e => handleRecurring(r.id, 'enabled', e.target.checked)}
-                />
-                <input
-                  type="text"
-                  className="rc-name"
-                  value={r.name}
-                  onChange={e => handleRecurring(r.id, 'name', e.target.value)}
-                />
+                <input type="checkbox" className="rc-check" checked={r.enabled}
+                  onChange={e => handleRecurring(r.id, 'enabled', e.target.checked)} />
+                <input type="text" className="rc-name" value={r.name}
+                  onChange={e => handleRecurring(r.id, 'name', e.target.value)} />
                 <div className="rc-amount-wrap">
                   <span className="rc-dollar">$</span>
-                  <input
-                    type="number"
-                    className="rc-amount"
-                    placeholder="0"
+                  <input type="number" className="rc-amount" placeholder="0"
                     value={r.amount}
                     onChange={e => handleRecurring(r.id, 'amount', e.target.value)}
-                    min="0"
-                    step="1"
-                  />
+                    min="0" step="1" />
                 </div>
                 <div className="rc-freq-seg">
                   {['monthly', 'yearly'].map(f => (
-                    <button
-                      key={f}
-                      className={`rc-freq-btn${r.freq === f ? ' active' : ''}`}
-                      onClick={() => handleRecurring(r.id, 'freq', f)}
-                    >
+                    <button key={f} className={`rc-freq-btn${r.freq === f ? ' active' : ''}`}
+                      onClick={() => handleRecurring(r.id, 'freq', f)}>
                       {f === 'monthly' ? 'Mo' : 'Yr'}
                     </button>
                   ))}
@@ -623,11 +619,7 @@ export function Budget({ allActiveTxs }) {
                     ? <>{fmt(mo)}{r.freq === 'yearly' && <span className="rc-yr-note"> avg</span>}</>
                     : <span className="muted">—</span>}
                 </span>
-                <button
-                  className="rc-delete"
-                  onClick={() => deleteRecurring(r.id)}
-                  title="Remove"
-                >×</button>
+                <button className="rc-delete" onClick={() => deleteRecurring(r.id)} title="Remove">×</button>
               </div>
             )
           })}

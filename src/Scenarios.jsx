@@ -566,7 +566,7 @@ export function Scenarios({ allActiveTxs, stocksData }) {
   return (
     <div className="scenarios-page">
 
-      {/* Timeline selector */}
+      {/* ── Top bar: year selector ──────────────────── */}
       <div className="proj-bar">
         <span className="proj-label">Projection timeline</span>
         <div className="year-tabs">
@@ -579,185 +579,180 @@ export function Scenarios({ allActiveTxs, stocksData }) {
 
       <InsightPanel insights={scenInsights} />
 
-      <div className="sc-layout">
-
-        {/* ── Sidebar ─────────────────────────────────── */}
-        <div className="sc-sidebar">
-
-          {/* Scenario list */}
-          <div className="sc-panel-title">
-            Scenarios
-            <button className="sc-new-btn" onClick={createScenario}>+ New</button>
-          </div>
-
-          {scenarios.length === 0 ? (
-            <div className="sc-empty-hint">
-              Create a scenario to model how life events affect your net worth.
-            </div>
-          ) : (
-            <div className="sc-scenario-list">
-              {scenarios.map(s => (
-                <div key={s.id}
-                  className={`sc-scenario-item ${s.id === activeId ? 'active' : ''}`}
-                  onClick={() => switchScenario(s.id)}>
-                  {renamingId === s.id ? (
-                    <input
-                      className="sc-rename-inp"
-                      autoFocus
-                      value={renameVal}
-                      onChange={e => setRenameVal(e.target.value)}
-                      onBlur={() => { renameScenario(s.id, renameVal || s.name); setRenamingId(null) }}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') { renameScenario(s.id, renameVal || s.name); setRenamingId(null) }
-                        if (e.key === 'Escape') setRenamingId(null)
-                      }}
-                      onClick={e => e.stopPropagation()}
-                    />
-                  ) : (
-                    <span className="sc-scenario-name"
-                      onDoubleClick={e => { e.stopPropagation(); setRenamingId(s.id); setRenameVal(s.name) }}>
-                      {s.name}
-                    </span>
-                  )}
-                  <span className="sc-scenario-count">{s.events?.length ?? 0}</span>
-                  <button className="sc-scenario-del"
-                    onClick={e => { e.stopPropagation(); deleteScenario(s.id) }}
-                    title="Delete scenario">✕</button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Event timeline for active scenario */}
-          {activeScenario && (
-            <>
-              <div className="sc-panel-title sc-events-title">
-                Events
-                <span className="sc-event-hint">double-click name to rename</span>
+      {/* ── Scenario tabs ───────────────────────────── */}
+      <div className="sc-tabs-bar">
+        <div className="sc-tabs-scroll">
+          {scenarios.length === 0
+            ? <span className="sc-tabs-empty">No scenarios — create one to get started</span>
+            : scenarios.map(s => (
+              <div key={s.id}
+                className={`sc-tab ${s.id === activeId ? 'active' : ''}`}
+                onClick={() => switchScenario(s.id)}>
+                {renamingId === s.id ? (
+                  <input
+                    className="sc-rename-inp"
+                    autoFocus
+                    value={renameVal}
+                    onChange={e => setRenameVal(e.target.value)}
+                    onBlur={() => { renameScenario(s.id, renameVal || s.name); setRenamingId(null) }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { renameScenario(s.id, renameVal || s.name); setRenamingId(null) }
+                      if (e.key === 'Escape') setRenamingId(null)
+                    }}
+                    onClick={e => e.stopPropagation()}
+                  />
+                ) : (
+                  <span className="sc-tab-name"
+                    onDoubleClick={e => { e.stopPropagation(); setRenamingId(s.id); setRenameVal(s.name) }}
+                    title="Double-click to rename">
+                    {s.name}
+                  </span>
+                )}
+                <span className="sc-tab-count">{s.events?.length ?? 0}</span>
+                <button className="sc-tab-del"
+                  onClick={e => { e.stopPropagation(); deleteScenario(s.id) }}
+                  title="Delete scenario">✕</button>
               </div>
+            ))
+          }
+        </div>
+        <button className="sc-new-btn" onClick={createScenario}>+ New</button>
+      </div>
 
-              {activeScenario.events.length === 0 && !addingEvent && (
-                <div className="sc-empty-hint">No events yet. Add one below.</div>
+      {/* ── No scenarios empty state ─────────────────── */}
+      {scenarios.length === 0 ? (
+        <div className="sc-no-scenario">
+          <div className="sc-ns-title">No scenarios yet</div>
+          <div className="sc-ns-sub">Create a scenario to model life events and see how they affect your net worth trajectory over time.</div>
+          <button className="sc-form-add" style={{ background: '#818cf8' }} onClick={createScenario}>
+            Create first scenario
+          </button>
+        </div>
+      ) : (
+        <div className="sc-layout">
+
+          {/* ── Sidebar: events for active scenario ─── */}
+          <div className="sc-sidebar">
+            <div className="sc-panel-title">
+              Events
+              {activeScenario && !addingEvent && (
+                <button className="sc-new-btn" onClick={() => setAddingEvent(true)}>+ Add</button>
               )}
+            </div>
 
+            {!activeScenario ? (
+              <div className="sc-empty-hint">Select a scenario above to view its events.</div>
+            ) : activeScenario.events.length === 0 ? (
+              <div className="sc-empty-hint">No events yet — click <strong>+ Add</strong> to model a life change.</div>
+            ) : (
               <div className="sc-event-list">
                 {activeScenario.events.map(e => (
                   <EventCard key={e.id} event={e}
                     onDelete={() => deleteEvent(activeScenario.id, e.id)} />
                 ))}
               </div>
+            )}
+          </div>
 
-              {addingEvent ? (
-                <AddEventForm
-                  onAdd={addEvent}
-                  onCancel={() => setAddingEvent(false)}
-                />
-              ) : (
-                <button className="sc-add-btn" onClick={() => setAddingEvent(true)}>
-                  + Add Event
-                </button>
-              )}
-            </>
-          )}
-        </div>
+          {/* ── Main panel ──────────────────────────── */}
+          <div className="sc-main">
 
-        {/* ── Main panel ──────────────────────────────── */}
-        <div className="sc-main">
+            {/* Add event form — full width in main panel */}
+            {addingEvent && (
+              <AddEventForm
+                onAdd={addEvent}
+                onCancel={() => setAddingEvent(false)}
+              />
+            )}
 
-          {!activeScenario ? (
-            <div className="sc-no-scenario">
-              <div className="sc-ns-title">No scenario selected</div>
-              <div className="sc-ns-sub">Create a scenario on the left and add events to see how they change your projected net worth.</div>
-              <button className="sc-form-add" style={{ background: '#818cf8' }} onClick={createScenario}>
-                Create first scenario
-              </button>
-            </div>
-          ) : (
-            <>
-              {/* Comparison chart */}
-              <div className="sc-chart-card">
-                <div className="sc-chart-title">
-                  Net Worth: Baseline vs
-                  <span className="sc-chart-scenario-name"> {activeScenario.name}</span>
-                </div>
-
-                <ResponsiveContainer width="100%" height={280}>
-                  <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
-                    <XAxis dataKey="year" tick={AX} tickLine={false} axisLine={false}
-                      tickFormatter={v => `${v}y`} />
-                    <YAxis tick={AX} tickLine={false} axisLine={false}
-                      tickFormatter={fmtY} width={64} />
-                    <Tooltip {...CHART_STYLE}
-                      formatter={(v, k) => [fmtY(v), k]}
-                      labelFormatter={v => `Year ${v}`} />
-                    <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-
-                    {/* Event reference lines */}
-                    {eventYears.filter(y => y > 0 && y <= years).map(y => (
-                      <ReferenceLine key={y} x={y} stroke="rgba(129,140,248,0.25)"
-                        strokeDasharray="4 3" />
-                    ))}
-
-                    <Line type="monotone" dataKey="Baseline" stroke="#6b7280"
-                      strokeWidth={2} strokeDasharray="6 4" dot={false} />
-                    <Line type="monotone" dataKey="Scenario" stroke="#818cf8"
-                      strokeWidth={2.5} dot={false} connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
+            {!activeScenario ? (
+              <div className="sc-no-scenario">
+                <div className="sc-ns-title">Select a scenario</div>
+                <div className="sc-ns-sub">Choose a scenario above or create a new one.</div>
               </div>
-
-              {/* Impact table */}
-              <div className="sc-impact-card">
-                <div className="sc-impact-title">Impact at key milestones</div>
-                <div className="sc-impact-table">
-                  <div className="sc-impact-header">
-                    <span>Year</span>
-                    <span>Baseline</span>
-                    <span>Scenario</span>
-                    <span>Difference</span>
+            ) : (
+              <>
+                {/* Comparison chart */}
+                <div className="sc-chart-card">
+                  <div className="sc-chart-title">
+                    Net Worth: Baseline vs
+                    <span className="sc-chart-scenario-name"> {activeScenario.name}</span>
                   </div>
-                  {milestones.map(y => {
-                    const b   = baselineData[y]?.total ?? 0
-                    const s   = scenarioData?.[y]?.total ?? 0
-                    const diff = s - b
-                    return (
-                      <div key={y} className="sc-impact-row">
-                        <span className="sc-impact-yr">Year {y}</span>
-                        <span className="sc-impact-val">{fmtY(b)}</span>
-                        <span className="sc-impact-val sc-scenario-val">{fmtY(s)}</span>
-                        <span className={`sc-impact-diff ${diff >= 0 ? 'positive' : 'negative'}`}>
-                          {fmtDiff(diff)}
-                        </span>
-                      </div>
-                    )
-                  })}
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
+                      <XAxis dataKey="year" tick={AX} tickLine={false} axisLine={false}
+                        tickFormatter={v => `${v}y`} />
+                      <YAxis tick={AX} tickLine={false} axisLine={false}
+                        tickFormatter={fmtY} width={64} />
+                      <Tooltip {...CHART_STYLE}
+                        formatter={(v, k) => [fmtY(v), k]}
+                        labelFormatter={v => `Year ${v}`} />
+                      <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+                      {eventYears.filter(y => y > 0 && y <= years).map(y => (
+                        <ReferenceLine key={y} x={y} stroke="rgba(129,140,248,0.25)"
+                          strokeDasharray="4 3" />
+                      ))}
+                      <Line type="monotone" dataKey="Baseline" stroke="#6b7280"
+                        strokeWidth={2} strokeDasharray="6 4" dot={false} />
+                      <Line type="monotone" dataKey="Scenario" stroke="#818cf8"
+                        strokeWidth={2.5} dot={false} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
-              </div>
 
-              {/* Per-year cashflow detail for scenario */}
-              {activeScenario.events.length > 0 && (
-                <div className="sc-events-legend">
-                  <div className="sc-impact-title">Event timeline</div>
-                  <div className="sc-legend-list">
-                    {activeScenario.events.map(e => {
-                      const et = EVENT_TYPES.find(t => t.id === e.type)
+                {/* Impact table */}
+                <div className="sc-impact-card">
+                  <div className="sc-impact-title">Impact at key milestones</div>
+                  <div className="sc-impact-table">
+                    <div className="sc-impact-header">
+                      <span>Year</span>
+                      <span>Baseline</span>
+                      <span>Scenario</span>
+                      <span>Difference</span>
+                    </div>
+                    {milestones.map(y => {
+                      const b    = baselineData[y]?.total ?? 0
+                      const s    = scenarioData?.[y]?.total ?? 0
+                      const diff = s - b
                       return (
-                        <div key={e.id} className="sc-legend-row">
-                          <div className="sc-legend-dot" style={{ background: et?.color }} />
-                          <span className="sc-legend-yr">Yr {e.year}</span>
-                          <span className="sc-legend-name">{e.label || et?.label}</span>
-                          <span className="sc-legend-sum">{eventSummary(e)}</span>
+                        <div key={y} className="sc-impact-row">
+                          <span className="sc-impact-yr">Year {y}</span>
+                          <span className="sc-impact-val">{fmtY(b)}</span>
+                          <span className="sc-impact-val sc-scenario-val">{fmtY(s)}</span>
+                          <span className={`sc-impact-diff ${diff >= 0 ? 'positive' : 'negative'}`}>
+                            {fmtDiff(diff)}
+                          </span>
                         </div>
                       )
                     })}
                   </div>
                 </div>
-              )}
-            </>
-          )}
+
+                {/* Event timeline legend */}
+                {activeScenario.events.length > 0 && (
+                  <div className="sc-events-legend">
+                    <div className="sc-impact-title">Event timeline</div>
+                    <div className="sc-legend-list">
+                      {activeScenario.events.map(e => {
+                        const et = EVENT_TYPES.find(t => t.id === e.type)
+                        return (
+                          <div key={e.id} className="sc-legend-row">
+                            <div className="sc-legend-dot" style={{ background: et?.color }} />
+                            <span className="sc-legend-yr">Yr {e.year}</span>
+                            <span className="sc-legend-name">{e.label || et?.label}</span>
+                            <span className="sc-legend-sum">{eventSummary(e)}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
